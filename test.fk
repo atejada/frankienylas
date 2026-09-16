@@ -1,0 +1,146 @@
+# test.fk — frankienylas tests, run against a tiny local mock server
+# (Frankie's own web_app()) instead of the real Nylas API. No network
+# access needed, no API key needed.
+#
+# Why a mock server instead of stub()/unstub(): `stitch "..."` loads the
+# stitch into its own private globals snapshot and copies the resulting
+# functions back up — so a stub() applied from this file never reaches
+# http_get/http_post as called *from inside* frankienylas.fk. A real
+# local server sidesteps that entirely and is arguably a better test
+# anyway: it exercises the actual HTTP + JSON round-trip.
+#
+# Run with: frankiec test test.fk
+
+stitch "frankienylas"
+
+TEST_PORT = 47821
+CAPTURED = {}
+
+def start_test_server()
+  app = web_app()
+
+  app.get("/v3/grants/:grant_id/messages") do |req|
+    CAPTURED["messages_auth"] = req.headers["Authorization"]
+    CAPTURED["messages_query"] = req.query
+    json_response({request_id: "r1", data: [{id: "m1"}]})
+  end
+
+  app.get("/v3/grants/:grant_id/messages/:id") do |req|
+    json_response({data: {id: req.params["id"], subject: "hi"}})
+  end
+
+  app.post("/v3/grants/:grant_id/messages/send") do |req|
+    CAPTURED["sent_body"] = req.json
+    json_response({data: {id: "sent1"}})
+  end
+
+  app.put("/v3/grants/:grant_id/contacts/:id") do |req|
+    json_response({data: {id: req.params["id"], given_name: req.json["given_name"]}})
+  end
+
+  app.delete("/v3/grants/:grant_id/drafts/:id") do |req|
+    CAPTURED["deleted_draft"] = req.params["id"]
+    response("", 204)
+  end
+
+  app.get("/v3/grants/:grant_id/events") do |req|
+    CAPTURED["events_query"] = req.query
+    json_response({data: []})
+  end
+
+  app.post("/v3/grants/:grant_id/events/:event_id/send-rsvp") do |req|
+    CAPTURED["rsvp_body"] = req.json
+    CAPTURED["rsvp_query"] = req.query
+    json_response({data: {status: req.json["status"]}})
+  end
+
+  app.get("/v3/grants/:grant_id/unauthorized") do |req|
+    json_response({request_id: "r1", error: {type: "auth_error", message: "Invalid API key"}}, 401)
+  end
+
+  app.get("/v3/grants/:grant_id/servererror") do |req|
+    response("internal server error", 500)
+  end
+
+  spawn do
+    app.run(TEST_PORT, "127.0.0.1")
+  end
+  sleep(0.4)
+end
+
+start_test_server()
+
+nylas = {api_key: "test-key", base_url: "http://127.0.0.1:#{TEST_PORT}"}
+grant = "grant-123"
+
+test "nylas_client builds the right base URL per region" do
+  us = nylas_client("k")
+  eu = nylas_client("k", region: "eu")
+  assert_eq(us["base_url"], "https://api.us.nylas.com", "us default")
+  assert_eq(eu["base_url"], "https://api.eu.nylas.com", "eu region")
+  assert_raises(->() { nylas_client("k", region: "mars") }, "unknown region raises")
+end
+
+test "nylas_list_messages sends the bearer token and unwraps data" do
+  result = nylas_list_messages(nylas, grant, params: {limit: 5})
+  assert_eq(CAPTURED["messages_auth"], "Bearer test-key", "auth header sent")
+  assert_eq(CAPTURED["messages_query"]["limit"], "5", "query param sent")
+  assert_eq(result[0]["id"], "m1", "unwraps data array")
+end
+
+test "nylas_get_message hits the right resource and unwraps a single object" do
+  result = nylas_get_message(nylas, grant, "m1")
+  assert_eq(result["subject"], "hi", "unwraps single-object data")
+end
+
+test "nylas_send_message POSTs the body and gets back the created id" do
+  body = {to: [{email: "friend@example.com"}], subject: "hi", body: "hello"}
+  result = nylas_send_message(nylas, grant, body)
+  assert_eq(CAPTURED["sent_body"]["subject"], "hi", "body arrived server-side untouched")
+  assert_eq(result["id"], "sent1", "unwraps created resource")
+end
+
+test "nylas_update_contact PUTs and round-trips the field" do
+  result = nylas_update_contact(nylas, grant, "c1", {given_name: "Alice"})
+  assert_eq(result["given_name"], "Alice", "update round-trips")
+end
+
+test "nylas_delete_draft DELETEs and a 204 becomes nil" do
+  result = nylas_delete_draft(nylas, grant, "d1")
+  assert_eq(CAPTURED["deleted_draft"], "d1", "server saw the right draft id")
+  assert_nil(result, "204 returns nil")
+end
+
+test "events endpoints fold calendar_id into the query string" do
+  nylas_list_events(nylas, grant, "cal1", params: {limit: 10})
+  assert_eq(CAPTURED["events_query"]["calendar_id"], "cal1", "calendar_id present")
+  assert_eq(CAPTURED["events_query"]["limit"], "10", "limit present")
+end
+
+test "nylas_rsvp_event posts a status body to send-rsvp" do
+  nylas_rsvp_event(nylas, grant, "cal1", "ev1", "yes")
+  assert_eq(CAPTURED["rsvp_body"]["status"], "yes", "rsvp status body")
+  assert_eq(CAPTURED["rsvp_query"]["calendar_id"], "cal1", "rsvp calendar_id query")
+end
+
+test "a non-2xx response raises NylasApiError with the API's own message" do
+  raised = false
+  begin
+    _nylas_get(nylas, grant, "/unauthorized")
+  rescue NylasApiError e
+    raised = true
+    assert_true(to_str(e).include?("Invalid API key"), "surfaces Nylas's own error message")
+  end
+  assert_true(raised, "NylasApiError was raised")
+end
+
+test "a non-JSON error body still raises with something useful" do
+  raised = false
+  begin
+    _nylas_get(nylas, grant, "/servererror")
+  rescue NylasApiError e
+    raised = true
+    assert_true(to_str(e).include?("internal server error"), "falls back to raw body")
+  end
+  assert_true(raised, "NylasApiError was raised")
+end

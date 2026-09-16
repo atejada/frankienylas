@@ -1,0 +1,27 @@
+# examples/create_event.fk — create a calendar event and RSVP to it.
+#
+# Needs a real Nylas API key + grant ID:
+#   NYLAS_API_KEY=... NYLAS_GRANT_ID=... frankiec run examples/create_event.fk
+
+stitch "frankienylas"
+
+nylas = nylas_client(env("NYLAS_API_KEY"))
+grant = env("NYLAS_GRANT_ID")
+
+calendars = nylas_list_calendars(nylas, grant)
+primary = calendars.select do |c|
+  c["is_primary"] == true
+end
+calendar_id = primary.length > 0 ? primary[0]["id"] : calendars[0]["id"]
+
+start_time = to_int(now().timestamp()) + 3600     # an hour from now
+end_time = start_time + 1800                       # 30 minutes
+
+event = nylas_create_event(nylas, grant, calendar_id, {
+  title: "Frankie sync",
+  when: {start_time: start_time, end_time: end_time}
+})
+puts "created event: #{event["id"]}"
+
+nylas_rsvp_event(nylas, grant, calendar_id, event["id"], "yes")
+puts "RSVP'd yes"

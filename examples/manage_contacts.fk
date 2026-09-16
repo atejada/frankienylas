@@ -1,0 +1,27 @@
+# examples/manage_contacts.fk — search for a contact, create one if missing.
+#
+# Needs a real Nylas API key + grant ID:
+#   NYLAS_API_KEY=... NYLAS_GRANT_ID=... frankiec run examples/manage_contacts.fk
+
+stitch "frankienylas"
+
+nylas = nylas_client(env("NYLAS_API_KEY"))
+grant = env("NYLAS_GRANT_ID")
+email = env("NYLAS_TEST_RECIPIENT", "friend@example.com")
+
+matches = nylas_list_contacts(nylas, grant, params: {email: email})
+
+if matches.length > 0
+  puts "Found #{matches.length} contact(s) for #{email}:"
+  matches.each do |c|
+    puts "  #{c["given_name"]} #{c["surname"]}"
+  end
+else
+  puts "No contact for #{email} — creating one."
+  created = nylas_create_contact(nylas, grant, {
+    given_name: "New",
+    surname: "Contact",
+    emails: [{email: email, type: "work"}]
+  })
+  puts "created: #{created["id"]}"
+end

@@ -1,0 +1,24 @@
+# examples/list_and_send.fk — list your inbox, then send a message.
+#
+# Needs a real Nylas API key + grant ID:
+#   NYLAS_API_KEY=... NYLAS_GRANT_ID=... frankiec run examples/list_and_send.fk
+
+stitch "frankienylas"
+
+nylas = nylas_client(env("NYLAS_API_KEY"))
+grant = env("NYLAS_GRANT_ID")
+
+puts "── Last 5 messages ──"
+inbox = nylas_list_messages(nylas, grant, params: {limit: 5})
+inbox.each do |m|
+  puts "#{m["subject"]}  (#{m["from"][0]["email"]})"
+end
+
+puts ""
+puts "── Sending a test message ──"
+sent = nylas_send_message(nylas, grant, {
+  to: [{email: env("NYLAS_TEST_RECIPIENT", "friend@example.com")}],
+  subject: "Hello from frankienylas",
+  body: "Sent with a 12-line HTTP wrapper. No SDK required."
+})
+puts "sent: #{sent["id"]}"
