@@ -38,6 +38,12 @@ you're starting from zero.
 Stitches install straight from a raw URL — no registry, no publishing step:
 
 ```bash
+frankiec stitch install https://raw.githubusercontent.com/atejada/frankienylas/main/stitches/frankienylas.fk --global
+```
+
+If you want it to be installed on a single project, then use:
+
+```bash
 frankiec stitch install https://raw.githubusercontent.com/atejada/frankienylas/main/stitches/frankienylas.fk
 ```
 
